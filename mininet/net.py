@@ -326,7 +326,7 @@ class Mininet( object ):
             for i, cls in enumerate( classes ):
                 self.addController( 'c%d' % i, cls )
 
-        info( '*** Adding hosts:\n' )
+        info( '*** Adding simhost and hosts:\n' )
         for hostName in topo.hosts():
             self.addHost( hostName, **topo.nodeInfo( hostName ) )
             info( hostName + ' ' )
