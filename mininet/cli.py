@@ -115,7 +115,11 @@ class CLI( Cmd ):
 
     def do_net( self, _line ):
         "List network connections."
-        dumpNodeConnections( self.mn.values() )
+        nl=self.nodelist
+        simhost=self.mn.nameToNode['simhost']
+        x=nl.index(simhost)
+        nl.remove(nl[x])
+        dumpNodeConnections( nl )
 
     def do_sh( self, line ):
         "Run an external shell command"

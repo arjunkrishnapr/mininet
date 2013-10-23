@@ -93,6 +93,8 @@ import signal
 from time import sleep
 from itertools import chain
 
+from mininet.sim import Simhost
+
 from mininet.cli import CLI
 from mininet.log import info, error, debug, output
 from mininet.node import Host, OVSKernelSwitch, Controller
@@ -326,7 +328,11 @@ class Mininet( object ):
             for i, cls in enumerate( classes ):
                 self.addController( 'c%d' % i, cls )
 
+	#Addition of Simhost
         info( '*** Adding simhost and hosts:\n' )
+	simhost=self.addHost('simhost',Host)
+	Simhost(simhost)
+	info(simhost.name + ' ')
         for hostName in topo.hosts():
             self.addHost( hostName, **topo.nodeInfo( hostName ) )
             info( hostName + ' ' )
