@@ -53,7 +53,7 @@ from operator import or_
 from time import sleep
 
 from mininet.log import info, error, warn, debug
-from mininet.util import ( quietRun, errRun, errFail, moveIntf, isShellBuiltin,
+from mininet.util import ( ipStr(), ipNum, quietRun, errRun, errFail, moveIntf, isShellBuiltin,
                            numCores, retry, mountCgroups )
 from mininet.moduledeps import moduleDeps, pathCheck, OVS_KMOD, OF_KMOD, TUN
 from mininet.link import Link, Intf, TCIntf
@@ -512,6 +512,17 @@ class Node( object ):
         self.params.update( moreParams )
         self.config( **self.params )
 
+    def configSimhost(self):
+	w,x,y,z,mac=10,0,0,1,None
+	for intf in self.intflist():
+	    ipn=ipNum(w,x,y,z)
+	    intf.ip=ipStr(ipn)+'/8'
+	    intf.setIP(intf.ip,8)
+	    intf.setMAC(mac)
+	    x+=1
+	    if x==256:
+		w+=1
+		x=0
     # This is here for backward compatibility
     def linkTo( self, node, link=Link ):
         """(Deprecated) Link to another node

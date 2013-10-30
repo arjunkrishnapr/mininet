@@ -27,6 +27,7 @@ Link: basic link class for creating veth pairs
 from mininet.log import info, error, debug
 from mininet.util import makeIntfPair, quietRun
 import re
+from mininet.sim import Simhost
 
 class Intf( object ):
 
@@ -347,24 +348,43 @@ class Link( object ):
         if not intfName2:
             intfName2 = self.intfName( node2, port2 )
 
-        self.makeIntfPair( intfName1, intfName2 )
+	simhost=Simhost.simhost_nodes[0]
 
+        port3=simhost.newPort()
+        sh_intf1_name=self.intfName(simhost,port3)
+        simhost.intfs[port3]=sh_intf1_name
+        simhost.ports[sh_intf1_name]=port3
+
+        port4=simhost.newPort()
+        sh_intf2_name=self.intfName(simhost,port4)
+        simhost.intfs[port4]=sh_intf2_name
+        simhost.ports[sh_intf2_name]=port4
+        
+	self.makeIntfPair( intfName1, sh_intf1_name )
         if not cls1:
             cls1 = intf
-        if not cls2:
-            cls2 = intf
         if not params1:
             params1 = {}
-        if not params2:
-            params2 = {}
-
         intf1 = cls1( name=intfName1, node=node1, port=port1,
                       link=self, **params1  )
+        cls3=intf
+        params3={}
+        intf3=cls3(name=sh_intf1_name,node=simhost,port=port3,
+                      link=self,**params3 )
+
+	self.makeIntfPair( sh_intf2_name, intfName2 )
+        if not cls2:
+            cls2 = intf
+        if not params2:
+            params2 = {}
         intf2 = cls2( name=intfName2, node=node2, port=port2,
                       link=self, **params2 )
-
+        cls4=intf
+        params4={}
+        intf4=cls4(name=sh_intf2_name,node=simhost,port=port4,
+                      link=self,**params4 )
         # All we are is dust in the wind, and our two interfaces
-        self.intf1, self.intf2 = intf1, intf2
+        self.intf1,self.intf2,self.intf3,self.intf4 = intf1,intf2,intf3,intf4
 
     @classmethod
     def intfName( cls, node, n ):
