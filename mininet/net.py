@@ -291,21 +291,25 @@ class Mininet( object ):
     def configHosts( self ):
         "Configure a set of hosts."
         for host in self.hosts:
-            info( host.name + ' ' )
-            intf = host.defaultIntf()
-            if intf:
-                host.configDefault()
+            if host.name!='simhost':
+                info( host.name + ' ' )
+                intf = host.defaultIntf()
+                if intf:
+                    host.configDefault( defaultRoute=intf )
+                else:
+                    # Don't configure nonexistent intf
+                    host.configDefault( ip=None, mac=None )
+                # You're low priority, dude!
+                # BL: do we want to do this here or not?
+                # May not make sense if we have CPU lmiting...
+                # quietRun( 'renice +18 -p ' + repr( host.pid ) )
+                # This may not be the right place to do this, but
+                # it needs to be done somewhere.
+                host.cmd( 'ifconfig lo up' )
             else:
-                # Don't configure nonexistent intf
-                host.configDefault( ip=None, mac=None )
-            # You're low priority, dude!
-            # BL: do we want to do this here or not?
-            # May not make sense if we have CPU lmiting...
-            # quietRun( 'renice +18 -p ' + repr( host.pid ) )
-            # This may not be the right place to do this, but
-            # it needs to be done somewhere.
-            host.cmd( 'ifconfig lo up' )
+                host.configSimhost()
         info( '\n' )
+
 
     def buildFromTopo( self, topo=None ):
         """Build mininet from a topology object
