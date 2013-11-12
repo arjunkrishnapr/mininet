@@ -140,7 +140,7 @@ class Mininet( object ):
         self.intf = intf
         self.ipBase = ipBase
         self.ipBaseNum, self.prefixLen = netParse( self.ipBase )
-        self.nextIP = 1  # start for address allocation
+        self.nextIP = 0  # start for address allocation
         self.inNamespace = inNamespace
         self.xterms = xterms
         self.cleanup = cleanup
@@ -172,7 +172,13 @@ class Mininet( object ):
            params: parameters for host
            returns: added host"""
         # Default IP and MAC addresses
-        defaults = { 'ip': ipAdd( self.nextIP,
+	if name=='simhost':
+            defaults = { 'ip': ipAdd( 1,
+                                  ipBaseNum=167903232,
+                                  prefixLen=self.prefixLen ) +
+                                  '/%s' % self.prefixLen }
+	else:
+	    defaults = { 'ip': ipAdd( self.nextIP,
                                   ipBaseNum=self.ipBaseNum,
                                   prefixLen=self.prefixLen ) +
                                   '/%s' % self.prefixLen }
@@ -308,7 +314,9 @@ class Mininet( object ):
                 host.cmd( 'ifconfig lo up' )
             else:
                 host.configSimhost()
+		host.cmd( 'ifconfig lo up' )
         info( '\n' )
+	self.nameToNode['simhost'].simhostRoute(self.hosts,self.nameToNode)
 
 
     def buildFromTopo( self, topo=None ):
@@ -492,6 +500,8 @@ class Mininet( object ):
         packets = 0
         lost = 0
         ploss = None
+	i=0
+        destIntf=''
         if not hosts:
             hosts = self.hosts
             output( '*** Ping: testing ping reachability\n' )
@@ -502,7 +512,12 @@ class Mininet( object ):
                     opts = ''
                     if timeout:
                         opts = '-W %s' % timeout
-                    result = node.cmd( 'ping -c1 %s %s' % (opts, dest.IP()) )
+		    if dest.name=='simhost':
+                        destIntf='simhost-eth'+str(i)
+                        i=i+2
+                    else:
+                        destIntf=None
+                    result = node.cmd( 'ping -c1 %s %s' % (opts, dest.IP(destIntf)) )
                     sent, received = self._parsePing( result )
                     packets += sent
                     if received > sent:
@@ -570,7 +585,12 @@ class Mininet( object ):
                     opts = ''
                     if timeout:
                         opts = '-W %s' % timeout
-                    result = node.cmd( 'ping -c1 %s %s' % (opts, dest.IP()) )
+		    if dest.name=='simhost':
+                        destIntf='simhost-eth'+str(i)
+                        i=i+2
+                    else:
+                        destIntf=None
+                    result = node.cmd( 'ping -c1 %s %s' % (opts, dest.IP(destIntf)) )
                     outputs = self._parsePingFull( result )
                     sent, received, rttmin, rttavg, rttmax, rttdev = outputs
                     all_outputs.append( (node, dest, outputs) )

@@ -53,8 +53,7 @@ from operator import or_
 from time import sleep
 
 from mininet.log import info, error, warn, debug
-from mininet.util import ( ipStr(), ipNum, quietRun, errRun, errFail, moveIntf, isShellBuiltin,
-                           numCores, retry, mountCgroups )
+from mininet.util import ( ipAdd, quietRun, errRun, errFail, moveIntf, isShellBuiltin, numCores, retry, mountCgroups, macColonHex )
 from mininet.moduledeps import moduleDeps, pathCheck, OVS_KMOD, OF_KMOD, TUN
 from mininet.link import Link, Intf, TCIntf
 
@@ -513,16 +512,23 @@ class Node( object ):
         self.config( **self.params )
 
     def configSimhost(self):
-	w,x,y,z,mac=10,0,0,1,None
-	for intf in self.intflist():
-	    ipn=ipNum(w,x,y,z)
-	    intf.ip=ipStr(ipn)+'/8'
-	    intf.setIP(intf.ip,8)
-	    intf.setMAC(mac)
-	    x+=1
-	    if x==256:
-		w+=1
-		x=0
+        mac,nextIP,ipBaseNum,prefixLen=0,0,167903232,8
+        for intf in self.intfList():
+            ipstr=ipAdd(nextIP,ipBaseNum=167903232,prefixLen=8)+'/'+str(prefixLen)
+            nextIP+=1
+            intf.setIP(ipstr)
+            macstr=macColonHex(mac+1)
+            mac+=65536
+            intf.setMAC(macstr)
+
+    def simhostRoute(self,hosts,nameToNode):
+        i=0
+        for host in hosts:
+            if host.name!='simhost':
+                self.cmd('ip route add '+host.IP()+'/32 dev simhost-eth'+str(i))
+                i+=2
+
+
     # This is here for backward compatibility
     def linkTo( self, node, link=Link ):
         """(Deprecated) Link to another node
