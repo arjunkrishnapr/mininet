@@ -113,7 +113,7 @@ class Mininet( object ):
                   controller=Controller, link=Link, intf=Intf,
                   build=True, xterms=False, cleanup=False, ipBase='10.0.0.0/8',
                   inNamespace=False,
-                  autoSetMacs=False, autoStaticArp=False, autoPinCpus=False,
+                  autoSetMacs=True, autoStaticArp=False, autoPinCpus=False,
                   listenPort=None ):
         """Create Mininet object.
            topo: Topo (topology) object or None
@@ -172,13 +172,7 @@ class Mininet( object ):
            params: parameters for host
            returns: added host"""
         # Default IP and MAC addresses
-	if name=='simhost':
-            defaults = { 'ip': ipAdd( 1,
-                                  ipBaseNum=167903232,
-                                  prefixLen=self.prefixLen ) +
-                                  '/%s' % self.prefixLen }
-	else:
-	    defaults = { 'ip': ipAdd( self.nextIP,
+	defaults = { 'ip': ipAdd( self.nextIP,
                                   ipBaseNum=self.ipBaseNum,
                                   prefixLen=self.prefixLen ) +
                                   '/%s' % self.prefixLen }
@@ -313,12 +307,14 @@ class Mininet( object ):
                 # it needs to be done somewhere.
                 host.cmd( 'ifconfig lo up' )
             else:
-                host.configSimhost()
+                host.configSimhost(self.ipBaseNum)
 		host.cmd( 'ifconfig lo up' )
         info( '\n' )
-	self.nameToNode['simhost'].simhostRoute(self.hosts,self.nameToNode)
-
-
+	
+    def configSwitches( self ):
+    	for switch in self.switches:
+    	    switch.configSwitch()
+    	    
     def buildFromTopo( self, topo=None ):
         """Build mininet from a topology object
            At the end of this function, everything should be connected
@@ -341,12 +337,20 @@ class Mininet( object ):
                 self.addController( 'c%d' % i, cls )
 
 	#Addition of Simhost
-        info( '*** Adding simhost and hosts:\n' )
+        info( '*** Adding hosts:\n' )
+	
 	simhost=self.addHost('simhost',Host)
 	Simhost(simhost)
-	info(simhost.name + ' ')
-        for hostName in topo.hosts():
-            self.addHost( hostName, **topo.nodeInfo( hostName ) )
+	
+	topoHosts=[]
+	topoHosts=topo.hosts()
+	topoHosts.append('hM')
+	
+        for hostName in topoHosts:
+            if hostName!='hM':
+            	self.addHost( hostName, **topo.nodeInfo( hostName ) )
+            else:
+            	self.addHost( hostName, Host )
             info( hostName + ' ' )
 
         info( '\n*** Adding switches:\n' )
@@ -355,11 +359,19 @@ class Mininet( object ):
             info( switchName + ' ' )
 
         info( '\n*** Adding links:\n' )
-        for srcName, dstName in topo.links(sort=True):
+        
+        topoLinks=[]
+        topoLinks=topo.links(sort=True)
+        topoLinks.append(('hM','s1'))
+        
+        for srcName, dstName in topoLinks:
             src, dst = self.nameToNode[ srcName ], self.nameToNode[ dstName ]
-            params = topo.linkInfo( srcName, dstName )
-            srcPort, dstPort = topo.port( srcName, dstName )
-            self.addLink( src, dst, srcPort, dstPort, **params )
+            if srcName!='hM':
+            	params = topo.linkInfo( srcName, dstName )
+                srcPort, dstPort = topo.port( srcName, dstName )
+                self.addLink( src, dst, srcPort, dstPort, **params )
+            else:
+            	self.addLink( src, dst )
             info( '(%s, %s) ' % ( src.name, dst.name ) )
 
         info( '\n' )
@@ -377,6 +389,7 @@ class Mininet( object ):
             self.configureControlNetwork()
         info( '*** Configuring hosts\n' )
         self.configHosts()
+        self.configSwitches()
         if self.xterms:
             self.startTerms()
         if self.autoStaticArp:
@@ -402,8 +415,9 @@ class Mininet( object ):
 
     def staticArp( self ):
         "Add all-pairs ARP entries to remove the need to handle broadcast."
-        for src in self.hosts:
-            for dst in self.hosts:
+        hstLst=self.hosts[1:]
+        for src in hstLst:
+            for dst in hstLst:
                 if src != dst:
                     src.setARP( ip=dst.IP(), mac=dst.MAC() )
 
@@ -419,6 +433,10 @@ class Mininet( object ):
             info( switch.name + ' ')
             switch.start( self.controllers )
         info( '\n' )
+        
+        N=len(self.hosts)-1
+        print(self.nameToNode['simhost'].cmd('gcc pcp_snd_rcv.c -lpcap -o nxtry'))
+        print(self.nameToNode['simhost'].cmd('./nxtry %s &'%N))
 
     def stop( self ):
         "Stop the controller(s), switches and hosts"
@@ -500,10 +518,8 @@ class Mininet( object ):
         packets = 0
         lost = 0
         ploss = None
-	i=0
-        destIntf=''
-        if not hosts:
-            hosts = self.hosts
+	if not hosts:
+            hosts = self.hosts[1:]
             output( '*** Ping: testing ping reachability\n' )
         for node in hosts:
             output( '%s -> ' % node.name )
@@ -512,12 +528,7 @@ class Mininet( object ):
                     opts = ''
                     if timeout:
                         opts = '-W %s' % timeout
-		    if dest.name=='simhost':
-                        destIntf='simhost-eth'+str(i)
-                        i=i+2
-                    else:
-                        destIntf=None
-                    result = node.cmd( 'ping -c1 %s %s' % (opts, dest.IP(destIntf)) )
+		    result = node.cmd( 'ping -c1 %s %s' % (opts, dest.IP()) )
                     sent, received = self._parsePing( result )
                     packets += sent
                     if received > sent:
@@ -576,7 +587,7 @@ class Mininet( object ):
         # Each value is a tuple: (src, dsd, [all ping outputs])
         all_outputs = []
         if not hosts:
-            hosts = self.hosts
+            hosts = self.hosts[1:]
             output( '*** Ping: testing ping reachability\n' )
         for node in hosts:
             output( '%s -> ' % node.name )
@@ -585,12 +596,7 @@ class Mininet( object ):
                     opts = ''
                     if timeout:
                         opts = '-W %s' % timeout
-		    if dest.name=='simhost':
-                        destIntf='simhost-eth'+str(i)
-                        i=i+2
-                    else:
-                        destIntf=None
-                    result = node.cmd( 'ping -c1 %s %s' % (opts, dest.IP(destIntf)) )
+		    result = node.cmd( 'ping -c1 %s %s' % (opts, dest.IP(destIntf)) )
                     outputs = self._parsePingFull( result )
                     sent, received, rttmin, rttavg, rttmax, rttdev = outputs
                     all_outputs.append( (node, dest, outputs) )
