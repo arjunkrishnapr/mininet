@@ -511,23 +511,27 @@ class Node( object ):
         self.params.update( moreParams )
         self.config( **self.params )
 
-    def configSimhost(self):
-        mac,nextIP,ipBaseNum,prefixLen=0,0,167903232,8
-        for intf in self.intfList():
-            ipstr=ipAdd(nextIP,ipBaseNum=167903232,prefixLen=8)+'/'+str(prefixLen)
+    def configSimhost(self,ipBase):
+        mac1,mac2,nextIP,ipBaseNum,prefixLen=1,65536,1,ipBase,8
+        for i in range(0,len(self.intfList()),2):
+            ipstr=ipAdd(nextIP,ipBaseNum=ipBase,prefixLen=8)+'/'+str(prefixLen)
             nextIP+=1
-            intf.setIP(ipstr)
-            macstr=macColonHex(mac+1)
-            mac+=65536
-            intf.setMAC(macstr)
+            self.intfList()[i+1].setIP(ipstr)
+            macstr=macColonHex(mac1)
+            mac1+=1
+            self.intfList()[i+1].setMAC(macstr)
+        for i in range(0,len(self.intfList()),2):
+            macstr=macColonHex(mac2)
+            mac2+=65536
+            self.intfList()[i].setMAC(macstr)
 
-    def simhostRoute(self,hosts,nameToNode):
-        i=0
-        for host in hosts:
-            if host.name!='simhost':
-                self.cmd('ip route add '+host.IP()+'/32 dev simhost-eth'+str(i))
-                i+=2
-
+    def configSwitch(self):
+        mac=65536
+        for intf in self.intfList():
+            if intf.name!='lo':
+                macstr=macColonHex(mac+1)
+                mac+=65536
+                intf.setMAC(macstr)
 
     # This is here for backward compatibility
     def linkTo( self, node, link=Link ):
