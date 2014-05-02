@@ -351,12 +351,12 @@ class Link( object ):
 	simhost=Simhost.simhost_nodes[0]
 
         port3=simhost.newPort()
-        sh_intf1_name=self.intfName(simhost,port3)
+        sh_intf1_name='sh-'+node1.name+'-eth'+repr(port3)
         simhost.intfs[port3]=sh_intf1_name
         simhost.ports[sh_intf1_name]=port3
 
         port4=simhost.newPort()
-        sh_intf2_name=self.intfName(simhost,port4)
+        sh_intf2_name='sh-'+node2.name+'-eth'+repr(port4)
         simhost.intfs[port4]=sh_intf2_name
         simhost.ports[sh_intf2_name]=port4
         

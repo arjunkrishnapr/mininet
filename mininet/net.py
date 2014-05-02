@@ -90,13 +90,12 @@ import os
 import re
 import select
 import signal
-from time import sleep
-from itertools import chain
-
-from mininet.sim import Simhost
+import time
+import threading
 
 from mininet.cli import CLI
 from mininet.log import info, error, debug, output
+from mininet.sim import Simhost
 from mininet.node import Host, OVSKernelSwitch, Controller
 from mininet.link import Link, Intf
 from mininet.util import quietRun, fixLimits, numCores, ensureRoot
@@ -104,11 +103,11 @@ from mininet.util import macColonHex, ipStr, ipParse, netParse, ipAdd
 from mininet.term import cleanUpScreens, makeTerms
 
 # Mininet version: should be consistent with README and LICENSE
-VERSION = "2.1.0"
+VERSION = "2.0.0"
 
 class Mininet( object ):
     "Network emulation with hosts spawned in network namespaces."
-
+    
     def __init__( self, topo=None, switch=OVSKernelSwitch, host=Host,
                   controller=Controller, link=Link, intf=Intf,
                   build=True, xterms=False, cleanup=False, ipBase='10.0.0.0/8',
@@ -172,18 +171,18 @@ class Mininet( object ):
            params: parameters for host
            returns: added host"""
         # Default IP and MAC addresses
-	defaults = { 'ip': ipAdd( self.nextIP,
+        defaults = { 'ip': ipAdd( self.nextIP,
                                   ipBaseNum=self.ipBaseNum,
                                   prefixLen=self.prefixLen ) +
                                   '/%s' % self.prefixLen }
-        if self.autoSetMacs:
+	if self.autoSetMacs:
             defaults[ 'mac'] = macColonHex( self.nextIP )
         if self.autoPinCpus:
             defaults[ 'cores' ] = self.nextCore
             self.nextCore = ( self.nextCore + 1 ) % self.numCores
         self.nextIP += 1
         defaults.update( params )
-        if not cls:
+	if not cls:
             cls = self.host
         h = cls( name, **defaults )
         self.hosts.append( h )
@@ -211,26 +210,16 @@ class Mininet( object ):
     def addController( self, name='c0', controller=None, **params ):
         """Add controller.
            controller: Controller class"""
-        # Get controller class
         if not controller:
             controller = self.controller
-        # Construct new controller if one is not given
-        if isinstance(name, Controller):
-            controller_new = name
-            # Pylint thinks controller is a str()
-            # pylint: disable=E1103
-            name = controller_new.name
-            # pylint: enable=E1103
-        else:
-            controller_new = controller( name, **params )
-        # Add new controller to net
+        controller_new = controller( name, **params )
         if controller_new:  # allow controller-less setups
             self.controllers.append( controller_new )
             self.nameToNode[ name ] = controller_new
         return controller_new
 
-    # BL: We now have four ways to look up nodes
-    # This may (should?) be cleaned up in the future.
+    # BL: is this better than just using nameToNode[] ?
+    # Should it have a better name?
     def getNodeByName( self, *args ):
         "Return node(s) with given name(s)"
         if len( args ) == 1:
@@ -240,37 +229,6 @@ class Mininet( object ):
     def get( self, *args ):
         "Convenience alias for getNodeByName"
         return self.getNodeByName( *args )
-
-    # Even more convenient syntax for node lookup and iteration
-    def __getitem__( self, key ):
-        """net [ name ] operator: Return node(s) with given name(s)"""
-        return self.nameToNode[ key ]
-
-    def __iter__( self ):
-        "return iterator over node names"
-        for node in chain( self.hosts, self.switches, self.controllers ):
-            yield node.name
-
-    def __len__( self ):
-        "returns number of nodes in net"
-        return ( len( self.hosts ) + len( self.switches ) +
-                 len( self.controllers ) )
-
-    def __contains__( self, item ):
-        "returns True if net contains named node"
-        return item in self.nameToNode
-
-    def keys( self ):
-        "return a list of all node names or net's keys"
-        return list( self )
-
-    def values( self ):
-        "return a list of all nodes or net's values"
-        return [ self[name] for name in self ]
-
-    def items( self ):
-        "return (key,value) tuple list for every node in net"
-        return zip( self.keys(), self.values() )
 
     def addLink( self, node1, node2, port1=None, port2=None,
                  cls=None, **params ):
@@ -284,15 +242,15 @@ class Mininet( object ):
                      'port2': port2,
                      'intf': self.intf }
         defaults.update( params )
-        if not cls:
+	if not cls:
             cls = self.link
         return cls( node1, node2, **defaults )
 
     def configHosts( self ):
         "Configure a set of hosts."
         for host in self.hosts:
-            if host.name!='simhost':
-                info( host.name + ' ' )
+	    if host.name!='simhost':
+		info( host.name + ' ' )
                 intf = host.defaultIntf()
                 if intf:
                     host.configDefault( defaultRoute=intf )
@@ -306,15 +264,17 @@ class Mininet( object ):
                 # This may not be the right place to do this, but
                 # it needs to be done somewhere.
                 host.cmd( 'ifconfig lo up' )
-            else:
-                host.configSimhost(self.ipBaseNum)
+	    else:
+		host.configSimhost(self.ipBaseNum,(len(self.hosts)-2))
 		host.cmd( 'ifconfig lo up' )
         info( '\n' )
-	
+
     def configSwitches( self ):
-    	for switch in self.switches:
-    	    switch.configSwitch()
-    	    
+	i=0
+	for switch in self.switches:
+	    switch.configSwitch(i)
+	    i+=1
+
     def buildFromTopo( self, topo=None ):
         """Build mininet from a topology object
            At the end of this function, everything should be connected
@@ -327,7 +287,7 @@ class Mininet( object ):
 
         info( '*** Creating network\n' )
 
-        if not self.controllers and self.controller:
+        if not self.controllers:
             # Add a default controller
             info( '*** Adding controller\n' )
             classes = self.controller
@@ -336,9 +296,8 @@ class Mininet( object ):
             for i, cls in enumerate( classes ):
                 self.addController( 'c%d' % i, cls )
 
-	#Addition of Simhost
         info( '*** Adding hosts:\n' )
-	
+
 	simhost=self.addHost('simhost',Host)
 	Simhost(simhost)
 	
@@ -346,33 +305,33 @@ class Mininet( object ):
 	topoHosts=topo.hosts()
 	topoHosts.append('hM')
 	
-        for hostName in topoHosts:
-            if hostName!='hM':
-            	self.addHost( hostName, **topo.nodeInfo( hostName ) )
+	for hostName in topoHosts:
+	    if hostName!='hM':
+		self.addHost( hostName, **topo.nodeInfo( hostName ) )
             else:
-            	self.addHost( hostName, Host )
+		self.addHost( hostName, Host )
             info( hostName + ' ' )
-
+	
         info( '\n*** Adding switches:\n' )
         for switchName in topo.switches():
             self.addSwitch( switchName, **topo.nodeInfo( switchName) )
             info( switchName + ' ' )
 
         info( '\n*** Adding links:\n' )
+	
+	topoLinks=[]
+	topoLinks=topo.links(sort=True)
+	topoLinks.append(('hM','s1'))
         
-        topoLinks=[]
-        topoLinks=topo.links(sort=True)
-        topoLinks.append(('hM','s1'))
-        
-        for srcName, dstName in topoLinks:
-            src, dst = self.nameToNode[ srcName ], self.nameToNode[ dstName ]
-            if srcName!='hM':
-            	params = topo.linkInfo( srcName, dstName )
+	for srcName, dstName in topoLinks:
+	    src, dst = self.nameToNode[ srcName ], self.nameToNode[ dstName ]
+	    if srcName!='hM':
+                params = topo.linkInfo( srcName, dstName )
                 srcPort, dstPort = topo.port( srcName, dstName )
                 self.addLink( src, dst, srcPort, dstPort, **params )
-            else:
-            	self.addLink( src, dst )
-            info( '(%s, %s) ' % ( src.name, dst.name ) )
+	    else:
+		self.addLink( src, dst )
+            info( '(%s, %s)\n' % ( src.name, dst.name ) )
 
         info( '\n' )
 
@@ -389,7 +348,7 @@ class Mininet( object ):
             self.configureControlNetwork()
         info( '*** Configuring hosts\n' )
         self.configHosts()
-        self.configSwitches()
+	self.configSwitches()
         if self.xterms:
             self.startTerms()
         if self.autoStaticArp:
@@ -398,9 +357,6 @@ class Mininet( object ):
 
     def startTerms( self ):
         "Start a terminal for each node."
-        if 'DISPLAY' not in os.environ:
-            error( "Error starting terms: Cannot connect to display\n" )
-            return
         info( "*** Running terms on %s\n" % os.environ[ 'DISPLAY' ] )
         cleanUpScreens()
         self.terms += makeTerms( self.controllers, 'controller' )
@@ -416,7 +372,7 @@ class Mininet( object ):
     def staticArp( self ):
         "Add all-pairs ARP entries to remove the need to handle broadcast."
         hstLst=self.hosts[1:]
-        for src in hstLst:
+	for src in hstLst:
             for dst in hstLst:
                 if src != dst:
                     src.setARP( ip=dst.IP(), mac=dst.MAC() )
@@ -433,25 +389,62 @@ class Mininet( object ):
             info( switch.name + ' ')
             switch.start( self.controllers )
         info( '\n' )
-        
-        N=len(self.hosts)-1
-        print(self.nameToNode['simhost'].cmd('gcc pcp_snd_rcv.c -lpcap -o nxtry'))
-        print(self.nameToNode['simhost'].cmd('./nxtry %s &'%N))
 
+	ilistnam=[]
+	for intfobj in self.nameToNode['simhost'].intfList():
+	    ilistnam.append(intfobj.name)
+	Ni=len(ilistnam)
+	Nh=len(self.hosts)
+#	print(self.nameToNode['simhost'].cmd('sudo gcc pcp_snd_rcv1.c -lpcap -o nxtry1'))
+#	print(self.nameToNode['simhost'].cmd('sudo ./nxtry1 %s &'%N))
+	
+	def server():
+	    print(self.hosts[1].cmd('sudo python /home/mininet/server.py &'))
+
+	def clients():
+	    print(self.hosts[i].cmd('sudo python /home/mininet/clients.py /client%s &'%(i-1)))
+
+	def tickserver():
+	    print(self.hosts[Nh-1].cmd('sudo python /home/mininet/tick_server.py %s &'%Nh))
+
+	def simhost():
+	    print(self.nameToNode['simhost'].cmd('sudo gcc simhost_debug3_may2nd.c -lpcap -o nxtry2'))
+	    print(self.nameToNode['simhost'].cmd('sudo ./nxtry %s &'%Ni))
+
+	t=threading.Thread(target=server)
+        tm=threading.Thread(target=tickserver)
+        tsim=threading.Thread(target=simhost)
+        tsim.start()
+        td=[]
+        for i in range(2,Nh-1):
+            td.append(i)
+        t.start()
+        time.sleep(1)
+	c=0
+        for i in td:
+            td[c]=threading.Thread(target=clients)
+            td[c].start()
+	    c+=1
+            time.sleep(1)
+            
+        tm.start()
+#       time.sleep(40)
+		
     def stop( self ):
+	print(self.nameToNode['simhost'].cmd('sudo pkill -f nxtry'))
         "Stop the controller(s), switches and hosts"
         if self.terms:
             info( '*** Stopping %i terms\n' % len( self.terms ) )
             self.stopXterms()
-        info( '*** Stopping %i switches\n' % len( self.switches ) )
-        for switch in self.switches:
-            info( switch.name + ' ' )
-            switch.stop()
-        info( '\n' )
         info( '*** Stopping %i hosts\n' % len( self.hosts ) )
         for host in self.hosts:
             info( host.name + ' ' )
             host.terminate()
+        info( '\n' )
+        info( '*** Stopping %i switches\n' % len( self.switches ) )
+        for switch in self.switches:
+            info( switch.name + ' ' )
+            switch.stop()
         info( '\n' )
         info( '*** Stopping %i controllers\n' % len( self.controllers ) )
         for controller in self.controllers:
@@ -529,7 +522,7 @@ class Mininet( object ):
                     if timeout:
                         opts = '-W %s' % timeout
 		    result = node.cmd( 'ping -c1 %s %s' % (opts, dest.IP()) )
-                    sent, received = self._parsePing( result )
+		    sent, received = self._parsePing( result )
                     packets += sent
                     if received > sent:
                         error( '*** Error: received too many packets' )
@@ -539,39 +532,27 @@ class Mininet( object ):
                     lost += sent - received
                     output( ( '%s ' % dest.name ) if received else 'X ' )
             output( '\n' )
-        if packets > 0:
             ploss = 100 * lost / packets
-            received = packets - lost
-            output( "*** Results: %i%% dropped (%d/%d received)\n" %
-                    ( ploss, received, packets ) )
-        else:
-            ploss = 0
-            output( "*** Warning: No packets sent\n" )
+        output( "*** Results: %i%% dropped (%d/%d lost)\n" %
+                ( ploss, lost, packets ) )
         return ploss
 
     @staticmethod
     def _parsePingFull( pingOutput ):
         "Parse ping output and return all data."
-        errorTuple = (1, 0, 0, 0, 0, 0)
         # Check for downed link
-        r = r'[uU]nreachable'
-        m = re.search( r, pingOutput )
-        if m is not None:
-            return errorTuple
+        if 'connect: Network is unreachable' in pingOutput:
+            return (1, 0)
         r = r'(\d+) packets transmitted, (\d+) received'
         m = re.search( r, pingOutput )
         if m is None:
             error( '*** Error: could not parse ping output: %s\n' %
                    pingOutput )
-            return errorTuple
+            return (1, 0, 0, 0, 0, 0)
         sent, received = int( m.group( 1 ) ), int( m.group( 2 ) )
         r = r'rtt min/avg/max/mdev = '
         r += r'(\d+\.\d+)/(\d+\.\d+)/(\d+\.\d+)/(\d+\.\d+) ms'
         m = re.search( r, pingOutput )
-        if m is None:
-            error( '*** Error: could not parse ping output: %s\n' %
-                   pingOutput )
-            return errorTuple
         rttmin = float( m.group( 1 ) )
         rttavg = float( m.group( 2 ) )
         rttmax = float( m.group( 3 ) )
@@ -586,7 +567,7 @@ class Mininet( object ):
         # should we check if running?
         # Each value is a tuple: (src, dsd, [all ping outputs])
         all_outputs = []
-        if not hosts:
+	if not hosts:
             hosts = self.hosts[1:]
             output( '*** Ping: testing ping reachability\n' )
         for node in hosts:
@@ -596,8 +577,8 @@ class Mininet( object ):
                     opts = ''
                     if timeout:
                         opts = '-W %s' % timeout
-		    result = node.cmd( 'ping -c1 %s %s' % (opts, dest.IP(destIntf)) )
-                    outputs = self._parsePingFull( result )
+		    result = node.cmd( 'ping -c1 %s %s' % (opts, dest.IP()) )
+		    outputs = self._parsePingFull( result )
                     sent, received, rttmin, rttavg, rttmax, rttdev = outputs
                     all_outputs.append( (node, dest, outputs) )
                     output( ( '%s ' % dest.name ) if received else 'X ' )
@@ -658,7 +639,7 @@ class Mininet( object ):
             error( 'Cannot find telnet in $PATH - required for iperf test' )
             return
         if not hosts:
-            hosts = [ self.hosts[ 0 ], self.hosts[ -1 ] ]
+            hosts = [ self.hosts[ 1 ], self.hosts[ -1 ] ]
         else:
             assert len( hosts ) == 2
         client, server = hosts

@@ -48,12 +48,12 @@ import os
 import re
 import signal
 import select
+import socket
+import threading
 from subprocess import Popen, PIPE, STDOUT
-from operator import or_
-from time import sleep
 
 from mininet.log import info, error, warn, debug
-from mininet.util import ( ipAdd, quietRun, errRun, errFail, moveIntf, isShellBuiltin, numCores, retry, mountCgroups, macColonHex )
+from mininet.util import ( ipAdd, quietRun, errRun, errFail, moveIntf, isShellBuiltin, numCores, retry, mountCgroups, macColonHex)
 from mininet.moduledeps import moduleDeps, pathCheck, OVS_KMOD, OF_KMOD, TUN
 from mininet.link import Link, Intf, TCIntf
 
@@ -76,7 +76,7 @@ class Node( object ):
 
         # Stash configuration parameters for future reference
         self.params = params
-
+        
         self.intfs = {}  # dict of port numbers to interfaces
         self.ports = {}  # dict of interfaces to port numbers
                          # replace with Port objects, eventually ?
@@ -119,8 +119,7 @@ class Node( object ):
         if self.inNamespace:
             opts += 'n'
         # bash -m: enable job control
-        # -s: pass $* to shell, and make process easy to find in ps
-        cmd = [ 'mnexec', opts, 'bash', '-ms', 'mininet:' + self.name ]
+        cmd = [ 'mnexec', opts, 'bash', '-m' ]
         self.shell = Popen( cmd, stdin=PIPE, stdout=PIPE, stderr=STDOUT,
                             close_fds=True )
         self.stdin = self.shell.stdin
@@ -141,10 +140,10 @@ class Node( object ):
 
     def cleanup( self ):
         "Help python collect its garbage."
-        # Intfs may end up in root NS
-        for intfName in self.intfNames():
-            if self.name in intfName:
-                quietRun( 'ip link del ' + intfName )
+        if not self.inNamespace:
+            for intfName in self.intfNames():
+                if self.name in intfName:
+                    quietRun( 'ip link del ' + intfName )
         self.shell = None
 
     # Subshell I/O, commands and control
@@ -182,8 +181,7 @@ class Node( object ):
 
     def terminate( self ):
         "Send kill signal to Node and clean up after it."
-        if self.shell:
-            os.kill( self.pid, signal.SIGKILL )
+        os.kill( self.pid, signal.SIGKILL )
         self.cleanup()
 
     def stop( self ):
@@ -293,7 +291,7 @@ class Node( object ):
            kwargs: Popen() keyword args"""
         defaults = { 'stdout': PIPE, 'stderr': PIPE,
                      'mncmd':
-                     [ 'mnexec', '-da', str( self.pid ) ] }
+                     [ 'mnexec', '-a', str( self.pid ) ] }
         defaults.update( kwargs )
         if len( args ) == 1:
             if type( args[ 0 ] ) is list:
@@ -347,9 +345,9 @@ class Node( object ):
         self.intfs[ port ] = intf
         self.ports[ intf ] = port
         self.nameToIntf[ intf.name ] = intf
-        debug( '\n' )
+	debug( '\n' )
         debug( 'added intf %s:%d to node %s\n' % ( intf, port, self.name ) )
-        if self.inNamespace:
+	if self.inNamespace:
             debug( 'moving', intf, 'into namespace for', self.name, '\n' )
             moveIntf( intf.name, self )
 
@@ -373,7 +371,7 @@ class Node( object ):
         """
         if not intf:
             return self.defaultIntf()
-        elif type( intf ) is str:
+        elif type( intf) is str:
             return self.nameToIntf[ intf ]
         else:
             return intf
@@ -392,19 +390,16 @@ class Node( object ):
                     connections += [ ( intf, link.intf1 ) ]
         return connections
 
-    def deleteIntfs( self, checkName=True ):
-        """Delete all of our interfaces.
-           checkName: only delete interfaces that contain our name"""
+    def deleteIntfs( self ):
+        "Delete all of our interfaces."
         # In theory the interfaces should go away after we shut down.
         # However, this takes time, so we're better off removing them
         # explicitly so that we won't get errors if we run before they
         # have been removed by the kernel. Unfortunately this is very slow,
         # at least with Linux kernels before 2.6.33
         for intf in self.intfs.values():
-            # Protect against deleting hardware interfaces
-            if ( self.name in intf.name ) or ( not checkName ):
-                intf.delete()
-                info( '.' )
+            intf.delete()
+            info( '.' )
 
     # Routing support
 
@@ -423,14 +418,11 @@ class Node( object ):
 
     def setDefaultRoute( self, intf=None ):
         """Set the default route to go through intf.
-           intf: Intf or {dev <intfname> via <gw-ip> ...}"""
-        # Note setParam won't call us if intf is none
-        if type( intf ) is str and ' ' in intf:
-            params = intf
-        else:
-            params = 'dev %s' % intf
-        self.cmd( 'ip route del default' )
-        return self.cmd( 'ip route add default', params )
+           intf: string, interface name"""
+        if not intf:
+            intf = self.defaultIntf()
+        self.cmd( 'ip route flush root 0/0' )
+        return self.cmd( 'route add default %s' % intf )
 
     # Convenience and configuration methods
 
@@ -456,7 +448,7 @@ class Node( object ):
 
     def MAC( self, intf=None ):
         "Return MAC address of a node or specific interface."
-        return self.intf( intf ).MAC()
+        return self.intf( intf ).IP()
 
     def intfIsUp( self, intf=None ):
         "Check if an interface is up."
@@ -476,7 +468,7 @@ class Node( object ):
            value may also be list or dict"""
         name, value = param.items()[ 0 ]
         f = getattr( self, method, None )
-        if not f or value is None:
+	if not f or value is None:
             return
         if type( value ) is list:
             result = f( *value )
@@ -498,10 +490,10 @@ class Node( object ):
         # If we were overriding this method, we would call
         # the superclass config method here as follows:
         # r = Parent.config( **_params )
-        r = {}
+	r = {}
         self.setParam( r, 'setMAC', mac=mac )
         self.setParam( r, 'setIP', ip=ip )
-        self.setParam( r, 'setDefaultRoute', defaultRoute=defaultRoute )
+        self.setParam( r, 'setdefaultRoute', defaultRoute=defaultRoute )
         # This should be examined
         self.cmd( 'ifconfig lo ' + lo )
         return r
@@ -511,28 +503,31 @@ class Node( object ):
         self.params.update( moreParams )
         self.config( **self.params )
 
-    def configSimhost(self,ipBase):
-        mac1,mac2,nextIP,ipBaseNum,prefixLen=1,65536,1,ipBase,8
-        for i in range(0,len(self.intfList()),2):
-            ipstr=ipAdd(nextIP,ipBaseNum=ipBase,prefixLen=8)+'/'+str(prefixLen)
-            nextIP+=1
-            self.intfList()[i+1].setIP(ipstr)
-            macstr=macColonHex(mac1)
+
+    def configSimhost(self,ipBase,host_count):
+	mac1,mac2,nextIP,ipBaseNum,prefixLen=1,65536,1,ipBase,8
+	for i in range(0,len(self.intfList()),2):
+	    if(i<(2*host_count)):
+		ipstr=ipAdd(nextIP,ipBaseNum=ipBase,prefixLen=8)+'/'+str(prefixLen)
+                nextIP+=1
+                self.intfList()[i+1].setIP(ipstr)
+	    macstr=macColonHex(mac1)
             mac1+=1
             self.intfList()[i+1].setMAC(macstr)
-        for i in range(0,len(self.intfList()),2):
+	for i in range(0,len(self.intfList()),2):
             macstr=macColonHex(mac2)
             mac2+=65536
             self.intfList()[i].setMAC(macstr)
 
-    def configSwitch(self):
-        mac=65536
-        for intf in self.intfList():
-            if intf.name!='lo':
-                macstr=macColonHex(mac+1)
-                mac+=65536
-                intf.setMAC(macstr)
+    def configSwitch(self,i):
+	mac=65536+(i*3*65536)
+	for intf in self.intfList():
+	    if intf.name!='lo':
+		macstr=macColonHex(mac+1)
+		mac+=65536
+            	intf.setMAC(macstr)
 
+	    
     # This is here for backward compatibility
     def linkTo( self, node, link=Link ):
         """(Deprecated) Link to another node
@@ -635,15 +630,14 @@ class CPULimitedHost( Host ):
            args: Popen() args, single list, or string
            kwargs: Popen() keyword args"""
         # Tell mnexec to execute command in our cgroup
-        mncmd = [ 'mnexec', '-da', str( self.pid ),
+        mncmd = [ 'mnexec', '-a', str( self.pid ),
                   '-g', self.name ]
         if self.sched == 'rt':
             mncmd += [ '-r', str( self.rtprio ) ]
         return Host.popen( self, *args, mncmd=mncmd, **kwargs )
 
     def cleanup( self ):
-        "Clean up Node, then clean up our cgroup"
-        super( CPULimitedHost, self ).cleanup()
+        "Clean up our cgroup"
         retry( retries=3, delaySecs=1, fn=self.cgroupDel )
 
     def chrt( self ):
@@ -786,7 +780,7 @@ class Switch( Node ):
     def defaultDpid( self ):
         "Derive dpid from switch name, s1 -> 1"
         try:
-            dpid = int( re.findall( r'\d+', self.name )[ 0 ] )
+            dpid = int( re.findall( '\d+', self.name )[ 0 ] )
             dpid = hex( dpid )[ 2: ]
             dpid = '0' * ( self.dpidLen - len( dpid ) ) + dpid
             return dpid
@@ -812,10 +806,6 @@ class Switch( Node ):
             error( '*** Error: %s has execed and cannot accept commands' %
                    self.name )
 
-    def connected( self ):
-        "Is the switch connected to a controller? (override this method)"
-        return False and self  # satisfy pylint
-
     def __repr__( self ):
         "More informative string representation"
         intfs = ( ','.join( [ '%s:%s' % ( i.name, i.IP() )
@@ -828,17 +818,15 @@ class UserSwitch( Switch ):
 
     dpidLen = 12
 
-    def __init__( self, name, dpopts='--no-slicing', **kwargs ):
+    def __init__( self, name, **kwargs ):
         """Init.
-           name: name for the switch
-           dpopts: additional arguments to ofdatapath (--no-slicing)"""
+           name: name for the switch"""
         Switch.__init__( self, name, **kwargs )
         pathCheck( 'ofdatapath', 'ofprotocol',
                    moduleName='the OpenFlow reference user switch' +
                               '(openflow.org)' )
         if self.listenPort:
             self.opts += ' --listen=ptcp:%i ' % self.listenPort
-        self.dpopts = dpopts
 
     @classmethod
     def setup( cls ):
@@ -853,32 +841,6 @@ class UserSwitch( Switch ):
         return self.cmd( 'dpctl ' + ' '.join( args ) +
                          ' tcp:127.0.0.1:%i' % self.listenPort )
 
-    def connected( self ):
-        "Is the switch connected to a controller?"
-        return 'remote.is-connected=true' in self.dpctl( 'status' )
-
-    @staticmethod
-    def TCReapply( intf ):
-        """Unfortunately user switch and Mininet are fighting
-           over tc queuing disciplines. To resolve the conflict,
-           we re-create the user switch's configuration, but as a
-           leaf of the TCIntf-created configuration."""
-        if type( intf ) is TCIntf:
-            ifspeed = 10000000000 # 10 Gbps
-            minspeed = ifspeed * 0.001
-
-            res = intf.config( **intf.params )
-            parent = res['parent']
-
-            # Re-add qdisc, root, and default classes user switch created, but
-            # with new parent, as setup by Mininet's TCIntf
-            intf.tc( "%s qdisc add dev %s " + parent +
-                     " handle 1: htb default 0xfffe" )
-            intf.tc( "%s class add dev %s classid 1:0xffff parent 1: htb rate "
-                     + str(ifspeed) )
-            intf.tc( "%s class add dev %s classid 1:0xfffe parent 1:0xffff " +
-                     "htb rate " + str(minspeed) + " ceil " + str(ifspeed) )
-
     def start( self, controllers ):
         """Start OpenFlow reference user datapath.
            Log to /tmp/sN-{ofd,ofp}.log.
@@ -891,19 +853,12 @@ class UserSwitch( Switch ):
         self.cmd( 'ifconfig lo up' )
         intfs = [ str( i ) for i in self.intfList() if not i.IP() ]
         self.cmd( 'ofdatapath -i ' + ','.join( intfs ) +
-                  ' punix:/tmp/' + self.name + ' -d %s ' % self.dpid +
-                  self.dpopts +
+                  ' punix:/tmp/' + self.name + ' -d ' + self.dpid +
                   ' 1> ' + ofdlog + ' 2> ' + ofdlog + ' &' )
         self.cmd( 'ofprotocol unix:/tmp/' + self.name +
                   ' ' + clist +
                   ' --fail=closed ' + self.opts +
                   ' 1> ' + ofplog + ' 2>' + ofplog + ' &' )
-        if "no-slicing" not in self.dpopts:
-            # Only TCReapply if slicing is enable
-            sleep(1) # Allow ofdatapath to start before re-arranging qdisc's
-            for intf in self.intfList():
-                if not intf.IP():
-                    self.TCReapply( intf )
 
     def stop( self ):
         "Stop OpenFlow reference user datapath."
@@ -966,14 +921,12 @@ class OVSLegacyKernelSwitch( Switch ):
 class OVSSwitch( Switch ):
     "Open vSwitch switch. Depends on ovs-vsctl."
 
-    def __init__( self, name, failMode='secure', datapath='kernel', **params ):
+    def __init__( self, name, failMode='secure', **params ):
         """Init.
            name: name for switch
-           failMode: controller loss behavior (secure|open)
-           datapath: userspace or kernel mode (kernel|user)"""
+           failMode: controller loss behavior (secure|open)"""
         Switch.__init__( self, name, **params )
         self.failMode = failMode
-        self.datapath = datapath
 
     @classmethod
     def setup( cls ):
@@ -996,8 +949,8 @@ class OVSSwitch( Switch ):
             exit( 1 )
 
     def dpctl( self, *args ):
-        "Run ovs-ofctl command"
-        return self.cmd( 'ovs-ofctl', args[ 0 ], self, *args[ 1: ] )
+        "Run ovs-dpctl command"
+        return self.cmd( 'ovs-dpctl', args[ 0 ], self, *args[ 1: ] )
 
     @staticmethod
     def TCReapply( intf ):
@@ -1017,23 +970,6 @@ class OVSSwitch( Switch ):
         "Disconnect a data port"
         self.cmd( 'ovs-vsctl del-port', self, intf )
 
-    def controllerUUIDs( self ):
-        "Return ovsdb UUIDs for our controllers"
-        uuids = []
-        controllers = self.cmd( 'ovs-vsctl -- get Bridge', self,
-                               'Controller' ).strip()
-        if controllers.startswith( '[' ) and controllers.endswith( ']' ):
-            controllers = controllers[ 1 : -1 ]
-            uuids = [ c.strip() for c in controllers.split( ',' ) ]
-        return uuids
-
-    def connected( self ):
-        "Are we connected to at least one of our controllers?"
-        results = [ 'true' in self.cmd( 'ovs-vsctl -- get Controller',
-                                         uuid, 'is_connected' )
-                    for uuid in self.controllerUUIDs() ]
-        return reduce( or_, results, False )
-
     def start( self, controllers ):
         "Start up a new OVS OpenFlow switch using ovs-vsctl"
         if self.inNamespace:
@@ -1045,9 +981,6 @@ class OVSSwitch( Switch ):
         # Annoyingly, --if-exists option seems not to work
         self.cmd( 'ovs-vsctl del-br', self )
         self.cmd( 'ovs-vsctl add-br', self )
-        if self.datapath == 'user':
-            self.cmd( 'ovs-vsctl set bridge', self,'datapath_type=netdev' )
-        int( self.dpid, 16 ) # DPID must be a hex string
         self.cmd( 'ovs-vsctl -- set Bridge', self,
                   'other_config:datapath-id=' + self.dpid )
         self.cmd( 'ovs-vsctl set-fail-mode', self, self.failMode )
@@ -1060,82 +993,13 @@ class OVSSwitch( Switch ):
         if self.listenPort:
             clist += ' ptcp:%s' % self.listenPort
         self.cmd( 'ovs-vsctl set-controller', self, clist )
-        # Reconnect quickly to controllers (1s vs. 15s max_backoff)
-        for uuid in self.controllerUUIDs():
-            if uuid.count( '-' ) != 4:
-                # Doesn't look like a UUID
-                continue
-            uuid = uuid.strip()
-            self.cmd( 'ovs-vsctl set Controller', uuid,
-                      'max_backoff=1000' )
 
     def stop( self ):
         "Terminate OVS switch."
         self.cmd( 'ovs-vsctl del-br', self )
-        if self.datapath == 'user':
-            self.cmd( 'ip link del', self )
         self.deleteIntfs()
 
 OVSKernelSwitch = OVSSwitch
-
-
-class IVSSwitch(Switch):
-    """IVS virtual switch"""
-
-    def __init__( self, name, **kwargs ):
-        Switch.__init__( self, name, **kwargs )
-
-    @classmethod
-    def setup( cls ):
-        "Make sure IVS is installed"
-        pathCheck( 'ivs-ctl', 'ivs',
-                   moduleName="Indigo Virtual Switch (projectfloodlight.org)" )
-        out, err, exitcode = errRun( 'ivs-ctl show' )
-        if exitcode:
-            error( out + err +
-                   'ivs-ctl exited with code %d\n' % exitcode +
-                   '*** The openvswitch kernel module might '
-                   'not be loaded. Try modprobe openvswitch.\n' )
-            exit( 1 )
-
-    def start( self, controllers ):
-        "Start up a new IVS switch"
-        args = ['ivs']
-        args.extend( ['--name', self.name] )
-        args.extend( ['--dpid', self.dpid] )
-        args.extend( ['--verbose'] )
-        for intf in self.intfs.values():
-            if not intf.IP():
-                args.extend( ['-i', intf.name] )
-        for c in controllers:
-            args.extend( ['-c', '%s:%d' % (c.IP(), c.port)] )
-        if self.listenPort:
-            args.extend( ['--listen', '127.0.0.1:%i' % self.listenPort] )
-        args.append( self.opts )
-
-        logfile = '/tmp/ivs.%s.log' % self.name
-
-        self.cmd( ' '.join(args) + ' >' + logfile + ' 2>&1 </dev/null &' )
-
-    def stop( self ):
-        "Terminate IVS switch."
-        self.cmd( 'kill %ivs' )
-        self.deleteIntfs()
-
-    def attach( self, intf ):
-        "Connect a data port"
-        self.cmd( 'ivs-ctl', 'add-port', '--datapath', self.name, intf )
-
-    def detach( self, intf ):
-        "Disconnect a data port"
-        self.cmd( 'ivs-ctl', 'del-port', '--datapath', self.name, intf )
-
-    def dpctl( self, *args ):
-        "Run dpctl command"
-        if not self.listenPort:
-            return "can't run dpctl without passive listening port"
-        return self.cmd( 'ovs-ofctl ' + ' '.join( args ) +
-                         ' tcp:127.0.0.1:%i' % self.listenPort )
 
 
 class Controller( Node ):
@@ -1165,7 +1029,7 @@ class Controller( Node ):
                              "installed." )
         listening = self.cmd( "echo A | telnet -e A %s %d" %
                               ( self.ip, self.port ) )
-        if 'Connected' in listening:
+        if 'Unable' not in listening:
             servers = self.cmd( 'netstat -atp' ).split( '\n' )
             pstr = ':%d ' % self.port
             clist = servers[ 0:1 ] + [ s for s in servers if pstr in s ]
@@ -1260,7 +1124,5 @@ class RemoteController( Controller ):
         "Warn if remote controller is not accessible"
         listening = self.cmd( "echo A | telnet -e A %s %d" %
                               ( self.ip, self.port ) )
-        if 'Connected' not in listening:
-            warn( "Unable to contact the remote controller"
-                  " at %s:%d\n" % ( self.ip, self.port ) )
-
+        if 'Unable' in listening:
+            warn( "Unable to contact the remote controller")
