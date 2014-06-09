@@ -1,56 +1,188 @@
-import socket,os
+import socket,os,signal
 import sys
 import time
 from time import sleep
-
+import threading
+import Queue
 
 n=int(sys.argv[1])
 #print n
 s=[]
 HN=[]
 l=4
-k=2
-'''for i in range(1,n-1):
-  name='"/hostnew%s"'%i
-  HN.append(name)'''
+debug_mode=1
+filt_mode=0
+#Thread=[]
 
-#print HN[0]
-#print HN[1]
+'''def handler(signal,frame):
+    global Thread
+    print "CTRL-C exiting..."
+#    os.remove('/home/mininet/simhost')
+    os.remove('/home/mininet/master')
 
-for i in range(0,n-2):
-  s.append(socket.socket(socket.AF_UNIX,socket.SOCK_DGRAM))
+    sys.exit(0)'''
 
 
-#for i in range(0,n-2):
- # s[i].sendto(str(l),("/hostnew%s"%(i+1)))
-
-#for i in range(0,n-2):
- # s[i].close()
-
-sm=socket.socket(socket.AF_UNIX,socket.SOCK_DGRAM)
+def send_tick_to_spec_host(sm,s,i):
+    print("***Sending Tick to h%s****"%i)
+    sm.sendto(str(l),("/home/mininet/simhost"))
+#    time.sleep(1)
    
+    s.sendto(str(l),("/hostnew%s"%(i-1)))
 
-c=1
-while(c):
-   
- count=6
- while(count):
-  # sm=socket.socket(socket.AF_UNIX,socket.SOCK_DGRAM)
-    print("*** Sending Tick ***")
+  
+
+def send_tick_to_all(s,sm):
+    print("***Sending Tick****")
+    sm.sendto(str(l),("/home/mininet/simhost"))
+#    time.sleep(1)
     for i in range(0,n-2):
-      s[i].sendto(str(l),("/hostnew%s"%(i+1)))
-
-    print("*** Sent to hosts ***")
-    sm.sendto(str(k),("/simhost"))
-    print("*** Sent to simhost ***")
-    count-=1
-    time.sleep(1)
-  #k=k+2
- c=0
-
-sm.close()
-os.remove('/simhost')
+        s[i].sendto(str(l),("/hostnew%s"%(i+1))) 
 
 
-for i in range(0,n-2):
-  s[i].close()
+def send(in_q):
+          
+         for i in range(0,n-2):
+             s.append(socket.socket(socket.AF_UNIX,socket.SOCK_DGRAM))
+         
+
+         sm=socket.socket(socket.AF_UNIX,socket.SOCK_DGRAM)
+         global filt_mode
+         global debug_mode
+         global j
+         while(1):
+
+         
+            if debug_mode:
+               data=in_q.get()
+               if data== 's':
+                  if filt_mode:
+                     send_tick_to_spec_host(sm,s[j-2],j)
+                  else:
+                     send_tick_to_all(s,sm)
+               #elif data=='c':
+               #   send_tick_to_all(s,sm)
+               #   time.sleep(1)
+               elif data=='h':
+                  pass
+                   
+       
+
+    #        else:
+    #            send_tick_to_all(s,sm)     
+    #            time.sleep(1)
+            elif filt_mode:
+                  send_tick_to_spec_host(sm,s[j-2],j)
+                  time.sleep(1)
+
+            else:
+                send_tick_to_all(s,sm)     
+                time.sleep(1)
+           
+
+         sm.close()
+         for i in range(0,n-2):
+             s[i].close() 
+         os.remove('/home/mininet/master')
+    
+
+
+
+def receive(out_q):
+
+    if os.path.exists("/home/mininet/master"):
+       os.remove("/home/mininet/master")
+    sr=socket.socket(socket.AF_UNIX,socket.SOCK_DGRAM)
+    sr.bind("/home/mininet/master")
+    global debug_mode
+    global filt_mode
+    global j
+    while(1):
+      print "waitinggggggggggg"
+#     k,addr=sr.recvfrom(1024)
+      if debug_mode :
+         k,addr=sr.recvfrom(1024)
+    #     sr.sendto("thank uuuuuuu :) ",("/home/mininet/external") )
+
+         if k=='c':
+               debug_mode=0
+               sys.stdout.write(k)
+               out_q.put(k)
+               
+         elif k=='s':
+               sys.stdout.write(k)
+               out_q.put(k)          
+        
+
+         elif k=='h':
+       
+              # out_q.put(k)
+              pass
+         elif k== 'all':
+              filt_mode=0
+
+         else:
+              filt_mode=1     
+              sys.stdout.write(k)
+              j=int(k[1:])
+              print j
+              out_q.put(j)
+
+
+             
+      else:
+         k,addr=sr.recvfrom(1024)
+      #   sr.sendto("wait plzzzzz",("/home/mininet/external"))
+         if k=='c':
+              pass
+
+         elif k=='s':
+              pass
+         
+
+         elif k=='h':
+              debug_mode=1
+              out_q.put(k)
+           
+       
+
+    sr.close()  
+
+
+q=Queue.Queue()
+    
+t1=threading.Thread(target=receive,args=(q,))
+t1.start()
+t2=threading.Thread(target=send,args=(q,))
+t2.start()
+#t1.start()
+#t2.start()
+
+
+'''def main():
+     q=Queue.Queue()
+     global Thread
+     t1=threading.Thread(target=receive,args=(q,))
+     t2=threading.Thread(target=send,args=(q,))
+     
+     t1.daemon=True
+     t1.start()
+    
+     t2.daemon=True
+     t2.start()
+    # t2.alive=True
+     Thread.append(t1)
+     Thread.append(t2)
+     for t in Thread:
+        while True:
+          t.join(100000)
+     print "exiting.."
+     
+if __name__ == '__main__':
+     
+   try:
+     main()   
+   except(KeyboardInterrupt,SystemExit):
+     signal.signal(signal.SIGINT,handler)'''
+   
+
